@@ -8,7 +8,7 @@ const app = express();
 const PORT = process.env.PORT || 3003;
 
 // --- KONFIGURASI ADMIN ---
-const ADMIN_PASSWORD = 'adminrahasia123'; // Password Admin Upload
+const ADMIN_PASSWORD = 'adminrahasia123';
 // -------------------------
 
 app.use(express.urlencoded({ extended: true }));
@@ -16,29 +16,16 @@ app.use(fileUpload());
 
 const VOUCHER_FILE = path.join(__dirname, 'vouchers.txt');
 
-// Simpan mapping active slug ke data voucher-nya sementara di RAM server
 let activeSessions = {};
 
-// Helper: Read vouchers
-function getVouchers() {
-    if (!fs.existsSync(VOUCHER_FILE)) return [];
-    return fs.readFileSync(VOUCHER_FILE, 'utf8')
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0);
-}
-
-// Helper: Bikin random slug unik (misal: srv-7a9f2b)
 function generateRandomSlug() {
-    return 'srv-' + Math.random().toString(36.substring(2), 15) + Math.random().toString(36).substring(2, 8);
+    return 'srv-' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 8);
 }
 
-// 1. Homepage Utama (Diblokir)
 app.get('/', (req, res) => {
     res.status(403).send('<h2 style="font-family:sans-serif;text-align:center;margin-top:50px;">403 Forbidden: Access Denied</h2>');
 });
 
-// 2. Endpoint Barcode Image Generator
 app.get('/barcode/:code', async (req, res) => {
     try {
         const png = await bwipjs.toBuffer({
@@ -55,7 +42,6 @@ app.get('/barcode/:code', async (req, res) => {
     }
 });
 
-// 3. Dynamic Customer Portal Berdasarkan Link Acak
 app.get('/v/:slug', (req, res) => {
     const slug = req.params.slug;
     const vouchers = activeSessions[slug];
@@ -112,7 +98,6 @@ app.get('/v/:slug', (req, res) => {
     res.send(html);
 });
 
-// 4. Halaman Admin Panel
 app.get('/admin', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -133,15 +118,11 @@ app.get('/admin', (req, res) => {
             <form action="/admin/update" method="POST" enctype="multipart/form-data">
                 <label>Password Admin:</label>
                 <input type="password" name="password" required placeholder="Masukkan Password Admin">
-                
                 <hr style="margin: 15px 0;">
-                
                 <label>Paste Kode Voucher (1 Kode per baris untuk Customer ini)</label>
                 <textarea name="voucher_text" rows="8" placeholder="B0498FE98BZT&#10;B6196CD5CRC0"></textarea>
-                
                 <label>Atau Upload File .txt</label>
                 <input type="file" name="voucher_file" accept=".txt">
-                
                 <button type="submit">🚀 Generate Link Unik Baru</button>
             </form>
         </div>
@@ -150,7 +131,6 @@ app.get('/admin', (req, res) => {
     `);
 });
 
-// 5. Action Proses & Generate Link Acak Otomatis
 app.post('/admin/update', (req, res) => {
     const { password, voucher_text } = req.body;
 
@@ -167,18 +147,15 @@ app.post('/admin/update', (req, res) => {
         return res.status(400).send('<h3>⚠️ Harap isi teks kode voucher atau upload file!</h3><a href="/admin">Kembali</a>');
     }
 
-    // Parsing voucher jadi array bersih
     const vouchersList = content.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     
     if (vouchersList.length === 0) {
         return res.status(400).send('<h3>⚠️ Daftar voucher kosong!</h3><a href="/admin">Kembali</a>');
     }
 
-    // Generate random slug unik khusus untuk transaksi/customer ini
     const newSlug = generateRandomSlug();
     activeSessions[newSlug] = vouchersList;
 
-    // Buat full link otomatis berdasarkan domain saat ini
     const host = req.get('host');
     const protocol = req.protocol;
     const generatedLink = `${protocol}://${host}/v/${newSlug}`;
