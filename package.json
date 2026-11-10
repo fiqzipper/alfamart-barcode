@@ -1,0 +1,17 @@
+{
+  "name": "alfamart-barcode-server",
+  "version": "1.0.0",
+  "description": "Server Web Barcode Voucher Alfamart",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "bwip-js": "^4.5.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
