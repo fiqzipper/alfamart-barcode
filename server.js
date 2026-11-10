@@ -7,15 +7,17 @@ const fileUpload = require('express-fileupload');
 const app = express();
 const PORT = process.env.PORT || 3003;
 
-// --- KONFIGURASI RAHASIA (Silakan Ganti Sesuai Keinginan) ---
-const SECRET_SLUG = 'srv-dbpcvgon74is73djtsh0'; // Token URL Rahasia Customer
-const ADMIN_PASSWORD = 'adminrahasia123';        // Password Admin Upload
-// -------------------------------------------------------------
+// --- KONFIGURASI ADMIN ---
+const ADMIN_PASSWORD = 'adminrahasia123'; // Password Admin Upload
+// -------------------------
 
 app.use(express.urlencoded({ extended: true }));
 app.use(fileUpload());
 
 const VOUCHER_FILE = path.join(__dirname, 'vouchers.txt');
+
+// Simpan mapping active slug ke data voucher-nya sementara di RAM server
+let activeSessions = {};
 
 // Helper: Read vouchers
 function getVouchers() {
@@ -26,7 +28,12 @@ function getVouchers() {
         .filter(line => line.length > 0);
 }
 
-// 1. Homepage Utama (Biar orang iseng gak bisa ngeliat)
+// Helper: Bikin random slug unik (misal: srv-7a9f2b)
+function generateRandomSlug() {
+    return 'srv-' + Math.random().toString(36.substring(2), 15) + Math.random().toString(36).substring(2, 8);
+}
+
+// 1. Homepage Utama (Diblokir)
 app.get('/', (req, res) => {
     res.status(403).send('<h2 style="font-family:sans-serif;text-align:center;margin-top:50px;">403 Forbidden: Access Denied</h2>');
 });
@@ -48,9 +55,23 @@ app.get('/barcode/:code', async (req, res) => {
     }
 });
 
-// 3. Tampilan Dashboard Customer (Hanya bisa dibuka lewat URL Rahasia)
-app.get(`/${SECRET_SLUG}`, (req, res) => {
-    const vouchers = getVouchers();
+// 3. Dynamic Customer Portal Berdasarkan Link Acak
+app.get('/v/:slug', (req, res) => {
+    const slug = req.params.slug;
+    const vouchers = activeSessions[slug];
+
+    if (!vouchers) {
+        return res.status(404).send(`
+            <!DOCTYPE html>
+            <html lang="id">
+            <head><title>Link Kadaluarsa</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+            <body style="font-family:sans-serif;text-align:center;padding-top:50px;background:#f9f9f9;">
+                <h2 style="color:#d9534f;">❌ Link Tidak Valid atau Sudah Berakhir</h2>
+                <p>Link voucher ini sudah tidak aktif atau salah.</p>
+            </body>
+            </html>
+        `);
+    }
 
     let cardsHtml = vouchers.map((code, index) => `
         <div class="card">
@@ -84,20 +105,20 @@ app.get(`/${SECRET_SLUG}`, (req, res) => {
             <h1>🎟️ Voucher Alfamart Ready Scan</h1>
             <p>Tunjukkan halaman ini ke kasir untuk di-scan langsung dari HP.</p>
         </div>
-        <div class="grid">${cardsHtml || '<p style="grid-column:1/-1;text-align:center;">Tidak ada voucher aktif.</p>'}</div>
+        <div class="grid">${cardsHtml}</div>
     </body>
     </html>
     `;
     res.send(html);
 });
 
-// 4. Halaman Admin Upload (Khusus Lu)
+// 4. Halaman Admin Panel
 app.get('/admin', (req, res) => {
     res.send(`
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Admin Panel - Update Voucher</title>
+        <title>Admin Panel - Generate Voucher Link</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             body { font-family: sans-serif; padding: 20px; max-width: 500px; margin: 0 auto; background: #f9f9f9; }
@@ -108,20 +129,20 @@ app.get('/admin', (req, res) => {
     </head>
     <body>
         <div class="box">
-            <h2>🔑 Admin Panel Voucher</h2>
+            <h2>🔑 Buat Link Voucher Unik Baru</h2>
             <form action="/admin/update" method="POST" enctype="multipart/form-data">
                 <label>Password Admin:</label>
                 <input type="password" name="password" required placeholder="Masukkan Password Admin">
                 
                 <hr style="margin: 15px 0;">
                 
-                <label>Option A: Paste Kode Voucher (1 Kode per baris)</label>
+                <label>Paste Kode Voucher (1 Kode per baris untuk Customer ini)</label>
                 <textarea name="voucher_text" rows="8" placeholder="B0498FE98BZT&#10;B6196CD5CRC0"></textarea>
                 
-                <label>Option B: Upload File vouchers.txt</label>
+                <label>Atau Upload File .txt</label>
                 <input type="file" name="voucher_file" accept=".txt">
                 
-                <button type="submit">💾 Simpan & Update Voucher</button>
+                <button type="submit">🚀 Generate Link Unik Baru</button>
             </form>
         </div>
     </body>
@@ -129,7 +150,7 @@ app.get('/admin', (req, res) => {
     `);
 });
 
-// 5. Action Process Upload Admin
+// 5. Action Proses & Generate Link Acak Otomatis
 app.post('/admin/update', (req, res) => {
     const { password, voucher_text } = req.body;
 
@@ -138,17 +159,48 @@ app.post('/admin/update', (req, res) => {
     }
 
     let content = '';
-
     if (req.files && req.files.voucher_file) {
         content = req.files.voucher_file.data.toString('utf8');
     } else if (voucher_text && voucher_text.trim() !== '') {
         content = voucher_text;
     } else {
-        return res.status(400).send('<h3>⚠️ Harap isi teks kode voucher atau upload file txt!</h3><a href="/admin">Kembali</a>');
+        return res.status(400).send('<h3>⚠️ Harap isi teks kode voucher atau upload file!</h3><a href="/admin">Kembali</a>');
     }
 
-    fs.writeFileSync(VOUCHER_FILE, content.trim());
-    res.send(`<h3>✅ Berhasil Update Voucher!</h3><p><a href="/${SECRET_SLUG}" target="_blank">Lihat Hasil Web Voucher Customer</a> | <a href="/admin">Kembali ke Admin</a></p>`);
+    // Parsing voucher jadi array bersih
+    const vouchersList = content.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    
+    if (vouchersList.length === 0) {
+        return res.status(400).send('<h3>⚠️ Daftar voucher kosong!</h3><a href="/admin">Kembali</a>');
+    }
+
+    // Generate random slug unik khusus untuk transaksi/customer ini
+    const newSlug = generateRandomSlug();
+    activeSessions[newSlug] = vouchersList;
+
+    // Buat full link otomatis berdasarkan domain saat ini
+    const host = req.get('host');
+    const protocol = req.protocol;
+    const generatedLink = `${protocol}://${host}/v/${newSlug}`;
+
+    res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head><title>Link Berhasil Dibuat</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="font-family:sans-serif;padding:30px;max-width:500px;margin:0 auto;background:#f9f9f9;text-align:center;">
+        <div style="background:white;padding:25px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1);">
+            <h2 style="color:#2e7d32;">✅ Link Unik Customer Berhasil Dibuat!</h2>
+            <p style="font-size:14px;color:#555;">Kirim link di bawah ini khusus ke customer tersebut:</p>
+            <input type="text" id="linkBox" value="${generatedLink}" readonly style="width:100%;padding:10px;font-size:14px;text-align:center;background:#eee;border:1px solid #ccc;border-radius:5px;margin-bottom:15px;" />
+            <br>
+            <button onclick="navigator.clipboard.writeText(document.getElementById('linkBox').value); alert('Link berhasil dicopy!');" style="background:#2e7d32;color:white;border:none;padding:10px 20px;font-weight:bold;border-radius:5px;cursor:pointer;margin-right:10px;">📋 Copy Link</button>
+            <a href="${generatedLink}" target="_blank" style="display:inline-block;background:#e11932;color:white;text-decoration:none;padding:10px 20px;font-weight:bold;border-radius:5px;">👁️ Lihat Web</a>
+            <br><br>
+            <a href="/admin" style="color:#666;font-size:14px;">&larr; Buat Link untuk Customer Lain</a>
+        </div>
+    </body>
+    </html>
+    `);
 });
 
 app.listen(PORT, () => console.log(`Server aktif di port ${PORT}`));
