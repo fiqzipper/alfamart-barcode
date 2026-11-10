@@ -15,8 +15,23 @@ app.use(express.urlencoded({ extended: true }));
 app.use(fileUpload());
 
 const VOUCHER_FILE = path.join(__dirname, 'vouchers.txt');
+const SESSIONS_FILE = path.join(__dirname, 'sessions.json');
 
-let activeSessions = {};
+// Helper: Baca database sesi dari file JSON (supaya aman gak ilang kalau server restart)
+function getSessions() {
+    if (!fs.existsSync(SESSIONS_FILE)) return {};
+    try {
+        const data = fs.readFileSync(SESSIONS_FILE, 'utf8');
+        return JSON.parse(data);
+    } catch (err) {
+        return {};
+    }
+}
+
+// Helper: Simpan sesi ke file JSON
+function saveSessions(sessions) {
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2));
+}
 
 function generateRandomSlug() {
     return 'srv-' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 8);
@@ -42,9 +57,11 @@ app.get('/barcode/:code', async (req, res) => {
     }
 });
 
+// Portal Customer berdasarkan link unik (Aman dari restart server)
 app.get('/v/:slug', (req, res) => {
     const slug = req.params.slug;
-    const vouchers = activeSessions[slug];
+    const sessions = getSessions();
+    const vouchers = sessions[slug];
 
     if (!vouchers) {
         return res.status(404).send(`
@@ -153,8 +170,11 @@ app.post('/admin/update', (req, res) => {
         return res.status(400).send('<h3>⚠️ Daftar voucher kosong!</h3><a href="/admin">Kembali</a>');
     }
 
+    // Ambil data sesi yang ada, tambahkan yang baru, lalu simpan ke file JSON
+    let sessions = getSessions();
     const newSlug = generateRandomSlug();
-    activeSessions[newSlug] = vouchersList;
+    sessions[newSlug] = vouchersList;
+    saveSessions(sessions);
 
     const host = req.get('host');
     const protocol = req.protocol;
