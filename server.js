@@ -1,33 +1,40 @@
 const express = require('express');
 const bwipjs = require('bwip-js');
+const fs = require('fs');
 const path = require('path');
+const fileUpload = require('express-fileupload');
 
 const app = express();
 const PORT = process.env.PORT || 3003;
 
-app.use(express.urlencoded({ extended: true }));
+// --- KONFIGURASI ADMIN ---
+const ADMIN_PASSWORD = 'adminrahasia123';
+// -------------------------
 
-// =========================================================================
-// 📌 DATABASE LINK ACAK PERMANEN
-// Tinggal tambahin kode acak (slug) dan daftar voucher customer di sini,
-// lalu Commit ke GitHub. Dijamin aman, gak bakal ilang & susah dilacak!
-// =========================================================================
-const customerLinks = {
-    // Contoh link acak untuk Customer A (Misal linknya: /v/srv-8x9q2m4p7k)
-    "srv-8x9q2m4p7k": [
-        "B0498FE98BZT",
-        "B6196CD5CRC0"
-    ],
-    
-    // Contoh link acak untuk Customer B (Misal linknya: /v/srv-3p9f2w1q5z)
-    "srv-3p9f2w1q5z": [
-        "VOUCHERXYZ111",
-        "VOUCHERXYZ222"
-    ]
-    
-    // Cara tambah baru: tinggal copy format di atas ke bawah sini ya, bro!
-};
-// =========================================================================
+app.use(express.urlencoded({ extended: true }));
+app.use(fileUpload());
+
+const SESSIONS_FILE = path.join(__dirname, 'sessions.json');
+
+// Helper: Baca database sesi dari file JSON dengan aman
+function getSessions() {
+    if (!fs.existsSync(SESSIONS_FILE)) return {};
+    try {
+        const data = fs.readFileSync(SESSIONS_FILE, 'utf8');
+        return JSON.parse(data);
+    } catch (err) {
+        return {};
+    }
+}
+
+// Helper: Simpan sesi ke file JSON
+function saveSessions(sessions) {
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2));
+}
+
+function generateRandomSlug() {
+    return 'srv-' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 8);
+}
 
 app.get('/', (req, res) => {
     res.status(403).send('<h2 style="font-family:sans-serif;text-align:center;margin-top:50px;">403 Forbidden: Access Denied</h2>');
@@ -49,24 +56,44 @@ app.get('/barcode/:code', async (req, res) => {
     }
 });
 
+// Portal Customer Berdasarkan Link Acak
 app.get('/v/:slug', (req, res) => {
     const slug = req.params.slug;
-    const vouchers = customerLinks[slug];
+    const sessions = getSessions();
+    const sessionData = sessions[slug];
 
-    if (!vouchers) {
+    if (!sessionData) {
         return res.status(404).send(`
             <!DOCTYPE html>
             <html lang="id">
-            <head><title>Link Tidak Ditemukan</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+            <head><title>Link Kadaluarsa</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
             <body style="font-family:sans-serif;text-align:center;padding-top:50px;background:#f9f9f9;">
-                <h2 style="color:#d9534f;">❌ Link Tidak Valid atau Salah</h2>
-                <p>Link voucher ini tidak terdaftar di sistem.</p>
+                <h2 style="color:#d9534f;">❌ Link Tidak Valid atau Sudah Berakhir</h2>
+                <p>Link voucher ini sudah kadaluarsa atau tidak terdaftar.</p>
             </body>
             </html>
         `);
     }
 
-    let cardsHtml = vouchers.map((code, index) => `
+    // Cek kadaluarsa opsional (misal: diset 3 hari / 72 jam sejak dibuat)
+    const createdAt = sessionData.createdAt || Date.now();
+    const expiryHours = 72; // Ketahanan link dalam jam (ubah sesuai keinginan, misal 72 = 3 hari)
+    const isExpired = (Date.now() - createdAt) > (expiryHours * 60 * 60 * 1000);
+
+    if (isExpired) {
+        return res.status(404).send(`
+            <!DOCTYPE html>
+            <html lang="id">
+            <head><title>Link Kadaluarsa</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+            <body style="font-family:sans-serif;text-align:center;padding-top:50px;background:#f9f9f9;">
+                <h2 style="color:#d9534f;">⏰ Link Telah Kadaluarsa</h2>
+                <p>Maaf, link voucher ini sudah melewati batas waktu aktif (${expiryHours} jam).</p>
+            </body>
+            </html>
+        `);
+    }
+
+    let cardsHtml = sessionData.vouchers.map((code, index) => `
         <div class="card">
             <div class="badge">Voucher #${index + 1}</div>
             <div class="code-text">Kode: <strong>${code}</strong></div>
@@ -103,6 +130,98 @@ app.get('/v/:slug', (req, res) => {
     </html>
     `;
     res.send(html);
+});
+
+// Halaman Admin Panel
+app.get('/admin', (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Admin Panel - Generate Voucher Link</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body { font-family: sans-serif; padding: 20px; max-width: 500px; margin: 0 auto; background: #f9f9f9; }
+            .box { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+            input, textarea, button { width: 100%; margin-bottom: 12px; padding: 10px; border-radius: 5px; border: 1px solid #ccc; box-sizing: border-box; }
+            button { background: #e11932; color: white; border: none; font-weight: bold; cursor: pointer; }
+        </style>
+    </head>
+    <body>
+        <div class="box">
+            <h2>🔑 Buat Link Voucher Unik Baru</h2>
+            <form action="/admin/update" method="POST" enctype="multipart/form-data">
+                <label>Password Admin:</label>
+                <input type="password" name="password" required placeholder="Masukkan Password Admin">
+                <hr style="margin: 15px 0;">
+                <label>Paste Kode Voucher (1 Kode per baris untuk Customer ini)</label>
+                <textarea name="voucher_text" rows="8" placeholder="B0498FE98BZT&#10;B6196CD5CRC0"></textarea>
+                <label>Atau Upload File .txt</label>
+                <input type="file" name="voucher_file" accept=".txt">
+                <button type="submit">🚀 Generate Link Unik Baru</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    `);
+});
+
+// Action Proses & Generate Link
+app.post('/admin/update', (req, res) => {
+    const { password, voucher_text } = req.body;
+
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(401).send('<h3>❌ Password Admin Salah!</h3><a href="/admin">Kembali</a>');
+    }
+
+    let content = '';
+    if (req.files && req.files.voucher_file) {
+        content = req.files.voucher_file.data.toString('utf8');
+    } else if (voucher_text && voucher_text.trim() !== '') {
+        content = voucher_text;
+    } else {
+        return res.status(400).send('<h3>⚠️ Harap isi teks kode voucher atau upload file!</h3><a href="/admin">Kembali</a>');
+    }
+
+    const vouchersList = content.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    
+    if (vouchersList.length === 0) {
+        return res.status(400).send('<h3>⚠️ Daftar voucher kosong!</h3><a href="/admin">Kembali</a>');
+    }
+
+    let sessions = getSessions();
+    const newSlug = generateRandomSlug();
+    
+    // Simpan voucher beserta waktu pembuatannya (timestamp)
+    sessions[newSlug] = {
+        vouchers: vouchersList,
+        createdAt: Date.now()
+    };
+    
+    saveSessions(sessions);
+
+    const host = req.get('host');
+    const protocol = req.protocol;
+    const generatedLink = `${protocol}://${host}/v/${newSlug}`;
+
+    res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head><title>Link Berhasil Dibuat</title><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+    <body style="font-family:sans-serif;padding:30px;max-width:500px;margin:0 auto;background:#f9f9f9;text-align:center;">
+        <div style="background:white;padding:25px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1);">
+            <h2 style="color:#2e7d32;">✅ Link Unik Customer Berhasil Dibuat!</h2>
+            <p style="font-size:14px;color:#555;">Link ini aktif otomatis selama 3 jam/hari sesuai setelan:</p>
+            <input type="text" id="linkBox" value="${generatedLink}" readonly style="width:100%;padding:10px;font-size:14px;text-align:center;background:#eee;border:1px solid #ccc;border-radius:5px;margin-bottom:15px;" />
+            <br>
+            <button onclick="navigator.clipboard.writeText(document.getElementById('linkBox').value); alert('Link berhasil dicopy!');" style="background:#2e7d32;color:white;border:none;padding:10px 20px;font-weight:bold;border-radius:5px;cursor:pointer;margin-right:10px;">📋 Copy Link</button>
+            <a href="${generatedLink}" target="_blank" style="display:inline-block;background:#e11932;color:white;text-decoration:none;padding:10px 20px;font-weight:bold;border-radius:5px;">👁️ Lihat Web</a>
+            <br><br>
+            <a href="/admin" style="color:#666;font-size:14px;">&larr; Buat Link untuk Customer Lain</a>
+        </div>
+    </body>
+    </html>
+    `);
 });
 
 app.listen(PORT, () => console.log(`Server aktif di port ${PORT}`));
